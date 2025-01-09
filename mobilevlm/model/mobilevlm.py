@@ -86,8 +86,6 @@ class MobileVLMMetaForCausalLM(ABC):
         # for different encoder, the images should be prepared into different shape
         image_features = self.get_model().get_vision_tower()(images) 
         image_features = self.get_model().mm_projector(image_features) # 1, 144, 2048
-        #torch.Size([1, 3, 336, 336])torch.Size([1, 576, 1024])torch.Size([1, 144, 2048]) large
-        #torch.Size([1, 3, 224, 224])torch.Size([1, 196, 768])torch.Size([1, 144, 2048]) base
         return image_features
 
     def prepare_inputs_labels_for_multimodal(
@@ -126,7 +124,7 @@ class MobileVLMMetaForCausalLM(ABC):
                     new_labels.append(labels[batch_idx])
                 cur_image_idx += 1
                 continue
-            image_token_indices = torch.where(cur_input_ids == IMAGE_TOKEN_INDEX)[0]
+            image_token_indices = torch.where(cur_input_ids == IMAGE_TOKEN_INDEX)[0] #1
             cur_new_input_embeds = []
             if labels is not None:
                 cur_labels = labels[batch_idx]
@@ -161,10 +159,9 @@ class MobileVLMMetaForCausalLM(ABC):
             if cur_input_ids.numel() > 0:
                 if getattr(self.config, 'tune_mm_mlp_adapter', False) and getattr(self.config, 'mm_use_im_start_end', False):
                     cur_new_input_embeds.append(self.get_model().embed_tokens(cur_input_ids).detach())
-                else: 
+                else:
                     cur_new_input_embeds.append(self.get_model().embed_tokens(cur_input_ids))
                 if labels is not None:
-                    # cur_new_labels.append(torch.cat((cur_labels,cur_labels),dim=-1))
                     cur_new_labels.append(cur_labels)
             cur_new_input_embeds = [x.to(device=self.device) for x in cur_new_input_embeds]
             cur_new_input_embeds = torch.cat(cur_new_input_embeds, dim=0)
