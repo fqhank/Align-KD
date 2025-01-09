@@ -760,7 +760,7 @@ def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer,
 
 
 def train():
-    # seed()
+    seed()
     global local_rank
 
     parser = transformers.HfArgumentParser((ModelArguments, DataArguments, TrainingArguments))
