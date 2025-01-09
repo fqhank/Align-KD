@@ -288,8 +288,6 @@ class VLMTrainer(Trainer):
         with self.compute_loss_context_manager():
             loss = self.compute_loss(model, inputs)
 
-        if loss==torch.tensor(0).cuda():
-            return torch.tensor(0).cuda()
         if self.args.n_gpu > 1:
             loss = loss.mean()
         torch.cuda.empty_cache()
@@ -314,18 +312,9 @@ class VLMTrainer(Trainer):
         
         return distil_loss
 
-    def get_vt_loss(self, teacher_front_attn, front_attn, t_v_mask): 
-        s = t_v_mask.shape[0] * t_v_mask.shape[1] * t_v_mask.shape[2] * t_v_mask.shape[3]
-        teacher_front_attn, front_attn = teacher_front_attn.mean(1).to(torch.float32), front_attn.mean(1).to(torch.float32)
-        t_v_mask = t_v_mask[:,0,:,:].to(torch.float32)
-        kl_tv = (teacher_front_attn * t_v_mask + 1e-8) * \
-            torch.log((teacher_front_attn * t_v_mask + 1e-8)/(front_attn * t_v_mask + 1e-8))
-        kl_loss = kl_tv.mean() * (s/t_v_mask.sum())
-        return kl_loss.to(torch.float16)
-        
-    def get_v_loss(self, teacher_front_attn, t_v_mask, v_feature, teacher_v_feature, k=32):
+    def get_v_loss(self, teacher_front_attn, t_v_mask, v_feature, teacher_v_feature, k=16):
         t_v_mask = t_v_mask[:,0,:,:]
-        teacher_front_attn = teacher_front_attn.mean(1)*t_v_mask
+        teacher_front_attn = teacher_front_attn.mean(1)
         top_attn, top_idx = teacher_front_attn.sum(-2).topk(k,dim=-1)
         if t_v_mask.sum(-2)[0,1]==True:
             top_idx = top_idx - 1
@@ -335,8 +324,9 @@ class VLMTrainer(Trainer):
         top_idx = top_idx.flatten()
         v_feature_pick = v_feature[batch_idx,top_idx]
         teacher_v_feature_pick = teacher_v_feature[batch_idx,top_idx]
-        v_loss = ((self.proj_adapter(teacher_v_feature.permute(0,2,1)) - v_feature.permute(0,2,1))**2).mean()
-        v_loss = v_loss + 0.1 * ((self.proj_adapter(teacher_v_feature_pick.unsqueeze(1).permute(0,2,1)) - v_feature_pick.unsqueeze(1).permute(0,2,1))**2).mean()
+        v_loss = ((self.proj_adapter(teacher_v_feature_pick.unsqueeze(1).permute(0,2,1)) - v_feature_pick.unsqueeze(1).permute(0,2,1))**2).mean()
+        v_loss_all = ((self.proj_adapter(teacher_v_feature.permute(0,2,1))-v_feature.permute(0,2,1))**2).mean()
+        v_loss = v_loss + v_loss_all
         
         return v_loss
     
@@ -353,16 +343,16 @@ class VLMTrainer(Trainer):
         
         idx = inputs.pop('idx')
         if len(idx)==0:
-            print('skip current')
-            return torch.tensor(0).cuda()
+            idx = None
         else:
             idx = idx[0]
-        outputs, v_feature, front_attn, t_v_mask = model(**inputs) # dict loss, logits, hidden_states=None, attention=None
-            
-        if self.args.distill == 1:
+        outputs, v_feature, front_attn, t_v_mask = model(**inputs) # dict loss, logits, hidden_states=None, attention=None  
+        if self.args.distill == 1 and idx is not None:
             with torch.no_grad():
                 teacher_outputs, teacher_v_feature, teacher_front_attn, _ = self.teacher(**inputs)
                 teacher_logits = teacher_outputs['logits']
+                teacher_front_attn = teacher_front_attn
+                
 
         # Save past state if it exists
         # TODO: this needs to be fixed and made cleaner later.
@@ -384,12 +374,19 @@ class VLMTrainer(Trainer):
             loss = outputs["loss"] if isinstance(outputs, dict) else outputs[0]
             if t_v_mask is None:
                 return (loss,outputs) if return_outputs else loss
+            if idx is None:
+                print('skip')
+                return (loss*0.0001,outputs) if return_outputs else loss*0.0001
             
             # distil
             if self.args.distill == 1:
                 v_logits_distill = 1 * self.get_distil_loss(outputs['logits'],teacher_logits)
-                v_loss = self.get_v_loss(teacher_front_attn, t_v_mask, v_feature, teacher_v_feature)
-                attn_loss = self.get_vt_loss(teacher_front_attn, front_attn, t_v_mask)
+                if teacher_front_attn.shape[-1]<144: # samples with no image
+                    v_loss = ((self.proj_adapter(teacher_v_feature.permute(0,2,1))-v_feature.permute(0,2,1))**2).mean()
+                else:
+                    v_loss = self.get_v_loss(teacher_front_attn, t_v_mask, v_feature, teacher_v_feature)
+                attn_loss = ((self.attn_adapter(teacher_front_attn) - front_attn)[t_v_mask!=0]**2).mean()
+
                 loss = loss + v_logits_distill + v_loss + attn_loss
             torch.cuda.empty_cache()
 
