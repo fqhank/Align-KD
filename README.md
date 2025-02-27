@@ -1,5 +1,5 @@
 # Align-KD for Mobile Vision-Language Model Distillation
-[【arxiv】Align-KD: Distilling Cross-Modal Alignment Knowledge for Mobile Vision-Language Model](https://arxiv.org/abs/2412.01282)  
+[【CVPR 2025】Align-KD: Distilling Cross-Modal Alignment Knowledge for Mobile Vision-Language Model](https://arxiv.org/abs/2412.01282)  
 Qianhan Feng, Wenshuo Li, Tong Lin, Xinghao Chen* 
 
 ## Abstract
